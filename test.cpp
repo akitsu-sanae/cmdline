@@ -3,10 +3,18 @@
 
 int main(int argc, char const* argv[]) {
     auto cmd = cmdline{
-        "name"_mandatory,
-        "type"_one_of("bin", "lib"),
-    } <= [](std::map<std::string, std::string> params) {
-            std::cout << params["name"] << ", " << params["type"] << std::endl;
+        "new"_subcommand(
+            "name"_mandatory,
+            "type"_one_of("bin", "lib")
+        ) <= [](std::map<std::string, std::string> params) {
+            std::cout << "new project: " << params["name"] << ", " << params["type"] << std::endl;
+        },
+
+        "build"_subcommand(
+            "type"_one_of("debug", "release")
+        ) <= [](std::map<std::string, std::string> params) {
+            std::cout << "building: " << params["type"] << std::endl;
+        }
     };
     /*
     auto cmd = cmdline{
