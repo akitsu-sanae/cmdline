@@ -8,9 +8,9 @@
 #include <string>
 #include <functional>
 
-#include <iostream>
-
 struct cmdline {
+    using action_type = std::function<void (std::map<std::string, std::string>)>;
+
     struct arg_base {
         explicit arg_base(std::string const& str) :
             name{str}
@@ -22,6 +22,8 @@ struct cmdline {
 
         std::vector<std::string>::const_iterator position(std::vector<std::string> const& args) const {
             auto it = std::find(args.begin(), args.end(), "--" + name);
+            if (it == args.end())
+                it = std::find(args.begin(), args.end(), std::string{"-"} + short_name_);
             if (it == args.end())
                 throw std::logic_error{name + " is required"};
             return it;
@@ -36,6 +38,7 @@ struct cmdline {
             return value;
         }
         std::string name;
+        char short_name_ = '\0';
     };
 
     struct mandatory : public arg_base {
@@ -46,6 +49,11 @@ struct cmdline {
                 std::vector<std::string>& args,
                 std::map<std::string, std::string>& params) const override {
             params[name] = value(args);
+        }
+
+        mandatory& short_name(char c) {
+            short_name_ = c;
+            return *this;
         }
     };
 
@@ -63,32 +71,97 @@ struct cmdline {
                 throw std::logic_error{val + " is not in range"};
             params[name] = val;
         }
+
+        one_of& short_name(char c) {
+            short_name_ = c;
+            return *this;
+        }
         std::vector<std::string> candidates;
     };
 
     struct subcommand : public arg_base {
-        template<typename ... Args>
-        explicit subcommand(std::string const& name, Args const& ... args) :
-            arg_base{name},
-            commands{args ...}
+        explicit subcommand(std::string const& name) :
+            arg_base{name}
         {}
+
+        template<typename T>
+        subcommand& operator<<(T t) {
+            commands.push_back(std::make_shared<T>(t));
+            return *this;
+        }
+        template<typename F>
+        subcommand& operator<=(F const& f) {
+            action = f;
+            return *this;
+        }
+
         void parse(
                 std::vector<std::string>& args,
                 std::map<std::string, std::string>& params) const override {
-            for (auto const& command : commands)
-                command->parse(args, params);
+
+            if (args[0] != name)
+                throw std::logic_error{"invalid parsing"};
+            args.erase(args.begin());
+            for (auto const& command : commands) {
+                bool is_subcommand = std::dynamic_pointer_cast<subcommand>(command) != nullptr;
+                auto is_top_command_name = command->name == args[0];
+                if (is_subcommand && is_top_command_name) {
+                    command->parse(args, params);
+                    break;
+                } else if (is_subcommand && !is_top_command_name) {
+                    continue;
+                } else {
+                    command->parse(args, params);
+                }
+            }
 
             if (action)
                 action(params);
         }
+        subcommand& short_name(char c) {
+            short_name_ = c;
+            return *this;
+        }
+
         std::vector<std::shared_ptr<arg_base>> commands;
-        std::function<void (std::map<std::string, std::string>)> action;
+        action_type action;
     };
 
-    template<typename ... Args>
-    explicit cmdline(Args const& ... args) :
-        commands{args ...}
-    {}
+    struct flag : public arg_base {
+        explicit flag(std::string const& name) :
+            arg_base{name}
+        {}
+
+        void parse(
+                std::vector<std::string>& args,
+                std::map<std::string, std::string>& params) const override {
+            auto p = position(args);
+            if (p != args.end()) {
+                params[name] = "true";
+                args.erase(p);
+            } else {
+                params[name] = "false";
+            }
+        }
+
+        flag& short_name(char c) {
+            short_name_ = c;
+            return *this;
+        }
+    };
+
+    explicit cmdline() = default;
+
+    template<typename T>
+    cmdline& operator<<(T t) {
+        commands.push_back(std::make_shared<T>(t));
+        return *this;
+    }
+    template<typename F>
+    cmdline& operator<=(F const& f) {
+        action = f;
+        return *this;
+    }
 
     void parse(int argc, char const* argv[]) {
         std::vector<std::string> args;
@@ -105,7 +178,7 @@ struct cmdline {
         }
         std::map<std::string, std::string> params;
         for (auto const& command : commands) {
-            auto is_subcommand = std::dynamic_pointer_cast<subcommand>(command);
+            bool is_subcommand = std::dynamic_pointer_cast<subcommand>(command) != nullptr;
             auto is_top_command_name = command->name == args[0];
             if (is_subcommand && is_top_command_name) {
                 command->parse(args, params);
@@ -120,42 +193,30 @@ struct cmdline {
         if (action)
             action(params);
     }
+
     std::string program_name;
 
     std::vector<std::shared_ptr<arg_base>> commands;
-    std::function<void (std::map<std::string, std::string> const&)> action;
+    action_type action;
 };
 
-auto operator<=(
-    std::shared_ptr<cmdline::subcommand> subcommand,
-    std::function<void (std::map<std::string, std::string>)> const& f) {
-    subcommand->action = f;
-    return subcommand;
-}
-
-auto operator<=(
-        cmdline& cmd,
-        std::function<void (std::map<std::string, std::string>)> const& f) {
-    cmd.action = f;
-    return cmd;
-}
-
 auto operator "" _mandatory(char const* str, size_t) {
-    return std::make_shared<cmdline::mandatory>(str);
+    return cmdline::mandatory{str};
 }
 
 auto operator "" _one_of(char const* str, size_t) {
     return [=](auto ... args) {
         std::vector<std::string> candidates{args ...};
-        return std::make_shared<cmdline::one_of>(str, candidates);
+        return cmdline::one_of{str, candidates};
     };
 }
 
 auto operator "" _subcommand(char const* str, size_t) {
-    return [=](auto ... args) {
-        std::vector<std::shared_ptr<cmdline::arg_base>> commands{args ...};
-        return std::make_shared<cmdline::subcommand>(str, commands);
-    };
+    return cmdline::subcommand{str};
+}
+
+auto operator ""_flag(char const* str, size_t) {
+    return cmdline::flag{str};
 }
 
 #endif
