@@ -19,6 +19,7 @@ struct cmdline {
         virtual void parse(
                 std::vector<std::string>& input,
                 std::map<std::string, std::string>&) const = 0;
+        virtual std::string help_message() const = 0;
 
         std::vector<std::string>::const_iterator position(std::vector<std::string> const& args) const {
             auto it = std::find(args.begin(), args.end(), "--" + name);
@@ -51,6 +52,10 @@ struct cmdline {
             params[name] = value(args);
         }
 
+        std::string help_message() const override {
+            return " --" + name + "=<str>";
+        }
+
         mandatory& short_name(char c) {
             short_name_ = c;
             return *this;
@@ -70,6 +75,17 @@ struct cmdline {
             if (found == candidates.end())
                 throw std::logic_error{val + " is not in range"};
             params[name] = val;
+        }
+
+        std::string help_message() const override {
+            std::string result = " --" + name + "=<";
+            for (auto it=candidates.begin(); it != candidates.end(); ++it) {
+                if (it != candidates.begin())
+                    result += ",";
+                result += *it;
+            }
+            result += ">";
+            return result;
         }
 
         one_of& short_name(char c) {
@@ -118,6 +134,14 @@ struct cmdline {
             if (action)
                 action(params);
         }
+
+        std::string help_message() const override {
+            std::string result = " " + name;
+            for (auto const& command : commands)
+                result += command->help_message();
+            return result;
+        }
+
         subcommand& short_name(char c) {
             short_name_ = c;
             return *this;
@@ -142,6 +166,10 @@ struct cmdline {
             } else {
                 params[name] = "false";
             }
+        }
+
+        std::string help_message() const override {
+            return " [--" + name + "]";
         }
 
         flag& short_name(char c) {
@@ -192,6 +220,30 @@ struct cmdline {
 
         if (action)
             action(params);
+    }
+
+    std::string help_message() const {
+        std::string head = "Usage: " + program_name;
+        bool exist_subcommand = false;
+        std::string subcommand_desp;
+        std::string others;
+
+        for (auto const& command : commands) {
+            bool is_subcommand = std::dynamic_pointer_cast<subcommand>(command) != nullptr;
+            if (is_subcommand) {
+                exist_subcommand = true;
+                subcommand_desp += program_name + command->help_message() + "\n";
+            } else {
+                others += command->help_message();
+            }
+        }
+
+        std::string result = head;
+        if (exist_subcommand)
+            result += " <subcommands ...>";
+        result += others + "\n";
+        result += subcommand_desp;
+        return result;
     }
 
     std::string program_name;

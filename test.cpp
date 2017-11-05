@@ -31,6 +31,7 @@ int main(int argc, char const* argv[]) {
                 std::cout << "Usage: ..." << std::endl;
         };
     cmd.parse(argc, argv);
+    std::cout << cmd.help_message() << std::endl;
 }
 
 
